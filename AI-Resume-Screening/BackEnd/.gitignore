@@ -1,0 +1,19 @@
+
+# Dependencies
+node_modules/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Uploaded files and candidate resumes
+uploads/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Generated Prisma files
+/generated/prisma/

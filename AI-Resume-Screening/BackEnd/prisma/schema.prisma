@@ -1,0 +1,374 @@
+// =============================================================================
+// AI RESUME SCREENING SYSTEM — Prisma Schema
+// Database: PostgreSQL
+// ORM: Prisma v5+
+// =============================================================================
+// Run commands:
+//   npx prisma generate          → generate Prisma Client
+//   npx prisma migrate dev       → apply migrations (dev)
+//   npx prisma migrate deploy    → apply migrations (production)
+//   npx prisma db seed           → seed initial admin user
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum Role {
+  ADMIN
+  USER
+}
+
+enum ApplicationStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  SHORTLISTED
+  REJECTED
+  HIRED
+}
+
+enum JobStatus {
+  DRAFT
+  ACTIVE
+  CLOSED
+  ARCHIVED
+}
+
+enum ResumeStatus {
+  PENDING
+  PROCESSING
+  PARSED
+  FAILED
+}
+
+enum FileType {
+  PDF
+  DOCX
+}
+
+enum NotificationType {
+  APPLICATION_RECEIVED
+  STATUS_UPDATED
+  SHORTLISTED
+  REJECTED
+  HIRED
+  PASSWORD_RESET
+  WELCOME
+}
+
+// =============================================================================
+// USER
+// =============================================================================
+
+model User {
+  id                  String    @id @default(uuid())
+  firstName           String    @db.VarChar(60)
+  lastName            String    @db.VarChar(60)
+  email               String    @unique @db.VarChar(255)
+  passwordHash        String    @db.VarChar(255)
+  phone               String?   @db.VarChar(20)
+  role                Role      @default(USER)
+  isEmailVerified     Boolean   @default(false)
+  isActive            Boolean   @default(true)
+  isBanned            Boolean   @default(false)
+  avatarUrl           String?   @db.VarChar(500)
+  bio                 String?   @db.VarChar(500)
+  emailVerifyToken    String?   @db.VarChar(255)
+  emailVerifyExpiry   DateTime?
+  passwordResetToken  String?   @db.VarChar(255)
+  passwordResetExpiry DateTime?
+  lastLoginAt         DateTime?
+  failedLoginCount    Int       @default(0)
+  lockedUntil         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletedAt           DateTime?
+
+  resumes       Resume[]
+  applications  Application[]
+  refreshTokens RefreshToken[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  jobsCreated   Job[]          @relation("JobCreatedBy")
+
+  @@index([email])
+  @@index([role])
+  @@index([isActive, deletedAt])
+  @@map("users")
+}
+
+// =============================================================================
+// REFRESH TOKEN
+// =============================================================================
+
+model RefreshToken {
+  id         String    @id @default(uuid())
+  token      String    @unique @db.VarChar(500)
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceInfo String?   @db.VarChar(255)
+  ipAddress  String?   @db.VarChar(45)
+  expiresAt  DateTime
+  isRevoked  Boolean   @default(false)
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+// =============================================================================
+// JOB
+// =============================================================================
+
+model Job {
+  id                  String     @id @default(uuid())
+  title               String     @db.VarChar(150)
+  department          String?    @db.VarChar(100)
+  location            String?    @db.VarChar(150)
+  jobType             String?    @db.VarChar(50)
+  experienceMin       Int?       @default(0)
+  experienceMax       Int?
+  salaryMin           Decimal?   @db.Decimal(12, 2)
+  salaryMax           Decimal?   @db.Decimal(12, 2)
+  salaryCurrency      String?    @db.VarChar(3)
+  description         String     @db.Text
+  responsibilities    String?    @db.Text
+  qualifications      String?    @db.Text
+  benefits            String?    @db.Text
+  requiredSkills      String[]
+  preferredSkills     String[]
+  requiredDegree      String?    @db.VarChar(100)
+  status              JobStatus  @default(DRAFT)
+  applicationDeadline DateTime?
+  totalPositions      Int        @default(1)
+  createdById         String
+  createdBy           User       @relation("JobCreatedBy", fields: [createdById], references: [id])
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+  deletedAt           DateTime?
+
+  applications Application[]
+
+  @@index([status, deletedAt])
+  @@index([createdById])
+  @@index([applicationDeadline])
+  @@map("jobs")
+}
+
+// =============================================================================
+// RESUME
+// =============================================================================
+
+model Resume {
+  id            String       @id @default(uuid())
+  userId        String
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  originalName  String       @db.VarChar(255)
+  storedName    String       @db.VarChar(255)
+  filePath      String       @db.VarChar(500)
+  fileUrl       String?      @db.VarChar(500)
+  fileType      FileType
+  fileSizeBytes Int
+  mimeType      String       @db.VarChar(100)
+  status        ResumeStatus @default(PENDING)
+  parseAttempts Int          @default(0)
+  parseError    String?      @db.Text
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  deletedAt     DateTime?
+
+  parsedData   ParsedResume?
+  applications Application[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("resumes")
+}
+
+// =============================================================================
+// PARSED RESUME
+// =============================================================================
+
+model ParsedResume {
+  id                   String   @id @default(uuid())
+  resumeId             String   @unique
+  resume               Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  rawText              String   @db.Text
+  candidateName        String?  @db.VarChar(120)
+  candidateEmail       String?  @db.VarChar(255)
+  candidatePhone       String?  @db.VarChar(20)
+  candidateAddress     String?  @db.VarChar(300)
+  linkedinUrl          String?  @db.VarChar(300)
+  githubUrl            String?  @db.VarChar(300)
+  portfolioUrl         String?  @db.VarChar(300)
+  skills               String[]
+  education            Json?
+  experience           Json?
+  certifications       Json?
+  languages            String[]
+  projects             Json?
+  summary              String?  @db.Text
+  totalExperienceYears Float?
+  highestDegree        String?  @db.VarChar(100)
+  parsingEngine        String?  @db.VarChar(50)
+  confidenceScore      Float?
+  parsedAt             DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([resumeId])
+  @@map("parsed_resumes")
+}
+
+// =============================================================================
+// APPLICATION
+// =============================================================================
+
+model Application {
+  id           String            @id @default(uuid())
+  userId       String
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId        String
+  job          Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  resumeId     String
+  resume       Resume            @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  status       ApplicationStatus @default(PENDING)
+  coverLetter  String?           @db.Text
+  adminNote    String?           @db.Text
+  reviewedById String?
+  reviewedAt   DateTime?
+  appliedAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  withdrawnAt  DateTime?
+
+  rankingResult RankingResult?
+
+  @@unique([userId, jobId])
+  @@index([jobId, status])
+  @@index([userId])
+  @@index([status])
+  @@map("applications")
+}
+
+// =============================================================================
+// RANKING RESULT
+// =============================================================================
+
+model RankingResult {
+  id              String      @id @default(uuid())
+  applicationId   String      @unique
+  application     Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  overallScore    Float
+  skillMatchScore Float
+  experienceScore Float
+  educationScore  Float
+  keywordScore    Float
+  semanticScore   Float?
+  matchedSkills   String[]
+  missingSkills   String[]
+  extraSkills     String[]
+  rank            Int?
+  scoringVersion  String      @db.VarChar(20)
+  scoringModel    String?     @db.VarChar(50)
+  scoredAt        DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([applicationId])
+  @@index([overallScore])
+  @@map("ranking_results")
+}
+
+// =============================================================================
+// NOTIFICATION
+// =============================================================================
+
+model Notification {
+  id         String           @id @default(uuid())
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       NotificationType
+  title      String           @db.VarChar(150)
+  message    String           @db.Text
+  isRead     Boolean          @default(false)
+  readAt     DateTime?
+  entityType String?          @db.VarChar(50)
+  entityId   String?          @db.VarChar(36)
+  emailSent  Boolean          @default(false)
+  emailSentAt DateTime?
+  createdAt  DateTime         @default(now())
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+// =============================================================================
+// AUDIT LOG
+// =============================================================================
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String   @db.VarChar(100)
+  entity    String?  @db.VarChar(50)
+  entityId  String?  @db.VarChar(36)
+  oldValues Json?
+  newValues Json?
+  ipAddress String?  @db.VarChar(45)
+  userAgent String?  @db.VarChar(300)
+  success   Boolean  @default(true)
+  errorMsg  String?  @db.VarChar(500)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// =============================================================================
+// SKILL TAXONOMY
+// =============================================================================
+
+model Skill {
+  id        String   @id @default(uuid())
+  name      String   @unique @db.VarChar(100)
+  aliases   String[]
+  category  String?  @db.VarChar(60)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+  @@index([category])
+  @@map("skills")
+}
+
+// =============================================================================
+// SYSTEM CONFIG
+// =============================================================================
+
+model SystemConfig {
+  id          String   @id @default(uuid())
+  key         String   @unique @db.VarChar(100)
+  value       String   @db.Text
+  description String?  @db.VarChar(300)
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_config")
+}
